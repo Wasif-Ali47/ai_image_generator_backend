@@ -24,5 +24,16 @@ module.exports = {
   LOGIN_FAILED: "failed to login",
   WRONG_PASSWORD: "wrong password",
 
-  NOT_LOGGEDIN: "login required"
+  OTP_SEND_FAILED: "Failed to send OTP. Please try again.",
+  INVALID_OTP: "Invalid OTP.",
+  EMAIL_NOT_VERIFIED: "Email not verified.",
+  USER_ID_OTP_REQUIRED: "userId and otp are required",
+
+  NOT_LOGGEDIN: "login required",
+
+  PROMPT_REQUIRED: "prompt is required",
+  IMAGE_GEN_FAILED: "image generation failed",
+  IMAGE_URL_REQUIRED: "imageUrl is required",
+  IMAGE_NOT_FOUND: "image not found",
+  INVALID_IMAGE_ID: "invalid image id"
 };

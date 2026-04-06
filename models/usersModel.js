@@ -19,7 +19,15 @@ const userSchema = new mongoose.Schema({
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "users"
-    }
+    },
+    /** 6-digit OTP for email verification (cleared after verify). Same pattern as ethical-hacking-user-service. */
+    otp: {
+        type: String,
+    },
+    /** false until OTP verified; omit on legacy users so login still works. */
+    emailVerified: {
+        type: Boolean,
+    },
 }, { timestamps: true });
 
 const User = mongoose.model("User", userSchema);

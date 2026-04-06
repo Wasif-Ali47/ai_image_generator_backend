@@ -51,8 +51,28 @@ async function verifyToken(req, res, next) {
     next();
 }
 
+function optionalVerifyToken(req, res, next) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        req.user = null;
+        return next();
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    try {
+        req.user = getUser(token);
+    } catch {
+        req.user = null;
+    }
+
+    next();
+}
+
 
 module.exports = {
     checkUserExistsByEmail,
-    verifyToken
+    verifyToken,
+    optionalVerifyToken
 };
