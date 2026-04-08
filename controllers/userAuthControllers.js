@@ -1,6 +1,8 @@
 const bcrypt = require("bcrypt");
+const mongoose = require("mongoose");
+const { OAuth2Client } = require("google-auth-library");
 const { setUser } = require("../services/userAuthService");
-const { sendOTPEmail } = require("../services/emailService");
+const { sendOTPEmail, sendEmail } = require("../services/emailService");
 const User = require("../models/usersModel");
 const {
   NETWORK_ERROR,
@@ -18,6 +20,13 @@ const {
   EMAIL_NOT_VERIFIED,
   USER_ID_OTP_REQUIRED,
 } = require("../messages/message");
+
+const googleClient = process.env.GOOGLE_CLIENT_ID
+  ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+  : null;
+
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const isValidOTP = (otp) => typeof otp === "string" && /^\d{6}$/.test(otp);
 
 // SIGN UP (OTP email — same flow as ethical-hacking-user-service)
 async function handleUserSignUp(req, res) {
@@ -121,8 +130,197 @@ async function handleUserLogin(req, res) {
   }
 }
 
+// --- Profile / password / Google (parity with AssistantAppBacken user-service auth routes) ---
+
+async function handleGoogleLogin(req, res) {
+  try {
+    if (!googleClient || !process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ error: "Google sign-in is not configured" });
+    }
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ error: "Google ID token required" });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return res.status(400).json({ error: "Invalid Google token" });
+    }
+
+    const { sub, email, name, email_verified, picture } = payload;
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = await User.create({
+        name: name || "Google User",
+        email,
+        googleId: sub,
+        emailVerified: email_verified !== false,
+        image: picture || undefined,
+      });
+    } else {
+      let updated = false;
+      if (!user.googleId) {
+        user.googleId = sub;
+        updated = true;
+      }
+      if (!user.image && picture) {
+        user.image = picture;
+        updated = true;
+      }
+      if (!user.emailVerified && email_verified) {
+        user.emailVerified = true;
+        updated = true;
+      }
+      if (updated) await user.save();
+    }
+
+    const token = setUser(user);
+    res.json({
+      token,
+      id: user._id,
+    });
+  } catch (err) {
+    console.error("Google login error:", err.message);
+    res.status(500).json({ error: "Google authentication failed" });
+  }
+}
+
+async function handleGetProfile(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid user ID" });
+    }
+
+    const user = await User.findById(id).select(
+      "-otp -resetOTP -password -emailVerified"
+    );
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const o = user.toObject();
+    o.fullName = o.name;
+    res.json(o);
+  } catch (err) {
+    console.error("getProfile error:", err);
+    res.status(500).json({ error: NETWORK_ERROR });
+  }
+}
+
+async function handleUpdateProfile(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (req.body.newPassword && !req.body.oldPassword) {
+      return res.status(400).json({ message: "Old password required" });
+    }
+
+    if (req.body.oldPassword && req.body.newPassword) {
+      const ok = await bcrypt.compare(req.body.oldPassword, user.password || "");
+      if (!ok) {
+        return res.status(400).json({ message: "Old password is incorrect" });
+      }
+    }
+
+    const updates = {};
+    const displayName = req.body.fullName ?? req.body.name;
+    if (displayName) updates.name = displayName;
+    if (req.body.newPassword) {
+      updates.password = await bcrypt.hash(req.body.newPassword, 10);
+    }
+    if (req.file) {
+      updates.image = `/uploads/profile/${req.file.filename}`;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "No data to update" });
+    }
+
+    await User.findByIdAndUpdate(id, updates, { new: true });
+    res.json("Your Information Updated");
+  } catch (err) {
+    console.error("updateProfile error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+async function handleForgotPassword(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email required" });
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetOTP = otp;
+    await user.save();
+
+    await sendEmail(email, "Reset Password OTP", `Your OTP is ${otp}`);
+    res.json({ message: "OTP sent" });
+  } catch (err) {
+    console.error("forgotPassword error:", err);
+    res.status(500).json({ error: NETWORK_ERROR });
+  }
+}
+
+async function handleResetPassword(req, res) {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ error: "All fields required" });
+    }
+    if (!isValidOTP(String(otp).trim())) {
+      return res.status(400).json({ error: "Invalid OTP format" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    const user = await User.findOne({ email, resetOTP: String(otp).trim() });
+    if (!user) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetOTP = null;
+    await user.save();
+
+    res.json({ message: "Password reset successful" });
+  } catch (err) {
+    console.error("resetPassword error:", err);
+    res.status(500).json({ error: NETWORK_ERROR });
+  }
+}
+
 module.exports = {
   handleUserSignUp,
   handleUserLogin,
   handleVerifyOTP,
+  handleGoogleLogin,
+  handleGetProfile,
+  handleUpdateProfile,
+  handleForgotPassword,
+  handleResetPassword,
 };

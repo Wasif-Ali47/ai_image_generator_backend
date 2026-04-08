@@ -4,6 +4,22 @@ const path = require("path");
 const fs = require("fs");
 const { getUser } = require("../services/userAuthService");
 
+/** JWT bearer auth — loads user from DB (same pattern as AssistantAppBacken user-service authenticate). */
+async function authenticate(req, res, next) {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+        const decoded = getUser(token);
+        const user = await User.findById(decoded._id);
+        if (!user) return res.status(401).json({ error: "User not found" });
+        req.authUser = user;
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid token" });
+    }
+}
+
 async function checkUserExistsByEmail(req, res, next) {
     const { email } = req.body;
 
@@ -74,5 +90,6 @@ function optionalVerifyToken(req, res, next) {
 module.exports = {
     checkUserExistsByEmail,
     verifyToken,
-    optionalVerifyToken
+    optionalVerifyToken,
+    authenticate,
 };

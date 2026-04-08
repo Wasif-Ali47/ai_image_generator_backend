@@ -28,6 +28,13 @@ const userSchema = new mongoose.Schema({
     emailVerified: {
         type: Boolean,
     },
+    googleId: {
+        type: String,
+    },
+    /** OTP for password reset (cleared after successful reset). Same as AssistantAppBacken user-service. */
+    resetOTP: {
+        type: String,
+    },
 }, { timestamps: true });
 
 const User = mongoose.model("User", userSchema);
